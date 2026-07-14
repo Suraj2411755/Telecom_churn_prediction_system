@@ -535,9 +535,9 @@ This project is licensed under the **MIT License** — see the [LICENSE](LICENSE
 
 **Built with love the Indian Telecom Industry**
 
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=for-the-badge&logo=linkedin)](https://www.linkedin.com/in/atiksh-sharma-49b71437a/)
-[![GitHub](https://img.shields.io/badge/GitHub-Follow-181717?style=for-the-badge&logo=github)](https://github.com/Atim45)
-[![Email](https://img.shields.io/badge/Email-Contact-D14836?style=for-the-badge&logo=gmail)](atikshsharma517@gmail.com)
+[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0077B5?style=for-the-badge&logo=linkedin)](ttps://www.linkedin.com/in/tavishi-jain-11895538a/)
+[![GitHub](https://img.shields.io/badge/GitHub-Follow-181717?style=for-the-badge&logo=github)](https://github.com/Tavishi-jain)
+[![Email](https://img.shields.io/badge/Email-Contact-D14836?style=for-the-badge&logo=gmail)](tavishijain456@gmail.com)
 
 *If this project helped you, please consider giving it a ⭐ star!*
 
