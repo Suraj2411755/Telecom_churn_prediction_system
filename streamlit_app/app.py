@@ -43,8 +43,8 @@ except ImportError:
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
 
-MODEL_PATH = PARENT_DIR / "telecom_churn_pipeline.joblib"
-METADATA_PATH = PARENT_DIR / "model_metadata.json"
+MODEL_PATH = PARENT_DIR / "app" / "telecom_churn_pipeline.joblib"
+METADATA_PATH = PARENT_DIR / "app" / "model_metadata.json"
 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
