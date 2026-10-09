@@ -583,6 +583,7 @@ def threshold_sensitivity_chart(meta: dict) -> go.Figure:
     return fig
 
 
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar navigation
 # ──────────────────────────────────────────────────────────────────────────────
@@ -595,27 +596,32 @@ with st.sidebar:
             <div style='font-size:1.1rem; font-weight:700; color:{LIGHT_TEAL};'>
                 Churn Intelligence
             </div>
-            <div style='font-size:0.75rem; color:#9AB;'>Telecom Analytics Platform</div>
+            <div style='font-size:0.75rem; color:#9AB;'>
+                Telecom Analytics Platform
+            </div>
         </div>
         <hr style='border-color:{TEAL}; margin: 12px 0;'>
         """,
         unsafe_allow_html=True,
     )
 
- 
-page = st.radio(
-    "Navigate",
-    [
-        "🏠 Home",
-        "🧠 Train Model",
-        "🔍 Single Prediction",
-        "📦 Batch Prediction",
-        "📊 Model Insights",
-        "ℹ️ About",
-    ],
-    label_visibility="collapsed",
-)
-           st.markdown("<hr style='border-color:#333; margin: 16px 0;'>", unsafe_allow_html=True)
+    page = st.radio(
+        "Navigate",
+        [
+            "🏠 Home",
+            "🧠 Train Model",
+            "🔍 Single Prediction",
+            "📦 Batch Prediction",
+            "📊 Model Insights",
+            "ℹ️ About",
+        ],
+        label_visibility="collapsed",
+    )
+
+    st.markdown(
+        "<hr style='border-color:#333; margin: 16px 0;'>",
+        unsafe_allow_html=True,
+    )
 
     # API status indicator
     try:
@@ -626,27 +632,29 @@ page = st.radio(
 
     if api_ok:
         st.markdown(
-            f"<div style='color:{GREEN}; font-size:0.8rem;'>● API Online</div>",
+            f"<div style='color:{GREEN}; font-size:0.8rem;'>"
+            "● API Online</div>",
             unsafe_allow_html=True,
         )
     else:
         st.markdown(
-            f"<div style='color:{AMBER}; font-size:0.8rem;'>● API Offline (local mode)</div>",
+            f"<div style='color:{AMBER}; font-size:0.8rem;'>"
+            "● API Offline (local mode)</div>",
             unsafe_allow_html=True,
         )
 
     meta = load_metadata()
+
     st.markdown(
         f"""
         <div style='font-size:0.75rem; color:#9AB; margin-top:8px;'>
-        Model v{meta.get('model_version','1.0.0')}<br>
-        Threshold: {meta.get('optimal_threshold', 0.28)}<br>
-        Framework: {meta.get('framework','LightGBM')}
+            Model v{meta.get('model_version', '1.0.0')}<br>
+            Threshold: {meta.get('optimal_threshold', 0.28)}<br>
+            Framework: {meta.get('framework', 'LightGBM')}
         </div>
         """,
         unsafe_allow_html=True,
     )
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Home
