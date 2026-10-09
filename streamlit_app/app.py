@@ -1140,7 +1140,8 @@ elif page == "📊 Model Insights":
     })
     st.dataframe(
         leaderboard.style
-        .applymap(lambda v: f"color: {LIGHT_TEAL}; font-weight:700" if v is True else "", subset=["Selected"])
+        
+.map(lambda v: f"color: {LIGHT_TEAL}; font-weight:700" if v is True else "", subset=["Selected"])
         .format({"Accuracy (Mean)": "{:.4f}", "ROC-AUC (Mean)": "{:.4f}"}),
         use_container_width=True,
         hide_index=True,
