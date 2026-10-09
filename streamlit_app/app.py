@@ -615,7 +615,7 @@ page = st.radio(
     ],
     label_visibility="collapsed",
 )
-    st.markdown("<hr style='border-color:#333; margin: 16px 0;'>", unsafe_allow_html=True)
+           st.markdown("<hr style='border-color:#333; margin: 16px 0;'>", unsafe_allow_html=True)
 
     # API status indicator
     try:
