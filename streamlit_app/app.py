@@ -602,12 +602,19 @@ with st.sidebar:
         unsafe_allow_html=True,
     )
 
-    page = st.radio(
-        "Navigate",
-        ["🏠 Home", "🔍 Single Prediction", "📦 Batch Prediction", "📊 Model Insights", "ℹ️ About"],
-        label_visibility="collapsed",
-    )
-
+ 
+page = st.radio(
+    "Navigate",
+    [
+        "🏠 Home",
+        "🧠 Train Model",
+        "🔍 Single Prediction",
+        "📦 Batch Prediction",
+        "📊 Model Insights",
+        "ℹ️ About",
+    ],
+    label_visibility="collapsed",
+)
     st.markdown("<hr style='border-color:#333; margin: 16px 0;'>", unsafe_allow_html=True)
 
     # API status indicator
@@ -765,6 +772,173 @@ if page == "🏠 Home":
             unsafe_allow_html=True,
         )
 
+
+# ──────────────────────────────────────────────────────────────────────────────
+# PAGE: Train Model
+# ──────────────────────────────────────────────────────────────────────────────
+
+
+elif page == "🧠 Train Model":
+    st.title("🧠 Train Churn Prediction Model")
+    st.write("Upload a CSV containing customer features and a churn label.")
+
+    training_file = st.file_uploader(
+        "Upload labelled training CSV",
+        type=["csv"],
+        key="training_csv"
+    )
+
+    if training_file is not None:
+        try:
+            df = pd.read_csv(training_file)
+            st.subheader("Dataset Preview")
+            st.dataframe(df.head(), use_container_width=True)
+
+            st.write("Rows:", df.shape[0])
+            st.write("Columns:", df.shape[1])
+
+            target_candidates = [
+                "Churn", "churn", "Exited",
+                "exited", "Churned", "churned"
+            ]
+            target = next(
+                (col for col in target_candidates if col in df.columns),
+                None
+            )
+
+            if target is None:
+                st.error(
+                    "Target column not found. Add a labelled churn column, "
+                    "such as Churn, with values 0/1 or Yes/No."
+                )
+            elif df[target].nunique() < 2:
+                st.error("The target column must contain both classes.")
+            else:
+                if st.button("Train Model", key="train_model_button"):
+                    from sklearn.model_selection import train_test_split
+                    from sklearn.compose import ColumnTransformer
+                    from sklearn.pipeline import Pipeline
+                    from sklearn.preprocessing import OneHotEncoder
+                    from sklearn.impute import SimpleImputer
+                    from sklearn.ensemble import RandomForestClassifier
+                    from sklearn.metrics import (
+                        accuracy_score, precision_score,
+                        recall_score, f1_score, confusion_matrix
+                    )
+
+                    X = df.drop(columns=[target])
+                    y = df[target]
+
+                    # Convert common text labels into binary labels.
+                    if y.dtype == "object":
+                        labels = y.astype(str).str.strip().str.lower()
+                        mapping = {
+                            "yes": 1, "no": 0,
+                            "true": 1, "false": 0,
+                            "churn": 1, "stay": 0,
+                            "left": 1, "retained": 0
+                        }
+                        y = labels.map(mapping)
+                        if y.isna().any():
+                            st.error(
+                                "Unrecognised target labels. Use 0/1 "
+                                "or Yes/No in the churn column."
+                            )
+                            st.stop()
+
+                    if y.nunique() < 2:
+                        st.error("The target must contain two classes.")
+                        st.stop()
+
+                    numeric_cols = X.select_dtypes(
+                        include=["number"]
+                    ).columns.tolist()
+                    categorical_cols = X.select_dtypes(
+                        exclude=["number"]
+                    ).columns.tolist()
+
+                    numeric_pipeline = Pipeline([
+                        ("imputer", SimpleImputer(strategy="median"))
+                    ])
+                    categorical_pipeline = Pipeline([
+                        ("imputer", SimpleImputer(
+                            strategy="most_frequent"
+                        )),
+                        ("encoder", OneHotEncoder(
+                            handle_unknown="ignore"
+                        ))
+                    ])
+
+                    preprocessing = ColumnTransformer([
+                        ("numeric", numeric_pipeline, numeric_cols),
+                        ("categorical", categorical_pipeline,
+                         categorical_cols)
+                    ])
+
+                    model = Pipeline([
+                        ("preprocessing", preprocessing),
+                        ("classifier", RandomForestClassifier(
+                            n_estimators=200,
+                            random_state=42,
+                            class_weight="balanced"
+                        ))
+                    ])
+
+                    try:
+                        X_train, X_test, y_train, y_test = (
+                            train_test_split(
+                                X, y, test_size=0.2,
+                                random_state=42, stratify=y
+                            )
+                        )
+                    except ValueError:
+                        st.error(
+                            "There are too few examples in one class "
+                            "for a stratified split. Add more labelled rows."
+                        )
+                        st.stop()
+
+                    model.fit(X_train, y_train)
+                    predictions = model.predict(X_test)
+
+                    st.subheader("Model Evaluation")
+                    c1, c2, c3, c4 = st.columns(4)
+                    c1.metric(
+                        "Accuracy",
+                        f"{accuracy_score(y_test, predictions):.1%}"
+                    )
+                    c2.metric(
+                        "Precision",
+                        f"{precision_score(y_test, predictions, zero_division=0):.1%}"
+                    )
+                    c3.metric(
+                        "Recall",
+                        f"{recall_score(y_test, predictions, zero_division=0):.1%}"
+                    )
+                    c4.metric(
+                        "F1 Score",
+                        f"{f1_score(y_test, predictions, zero_division=0):.1%}"
+                    )
+
+                    st.write("Confusion matrix")
+                    st.dataframe(
+                        pd.DataFrame(
+                            confusion_matrix(y_test, predictions),
+                            index=["Actual 0", "Actual 1"],
+                            columns=["Predicted 0", "Predicted 1"]
+                        )
+                    )
+
+                    st.session_state["trained_churn_model"] = model
+                    st.session_state["trained_target"] = target
+                    st.success(
+                        "Training complete for this session. "
+                        "The model is not yet permanently saved."
+                    )
+
+        except Exception as e:
+            st.error(f"Could not process this CSV: {e}")
+
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Single Prediction
 # ──────────────────────────────────────────────────────────────────────────────
@@ -812,7 +986,7 @@ elif page == "🔍 Single Prediction":
                 )
                 date_of_registration = st.date_input(
                     "Date of Registration",
-                    value=date(2022, 1, 15),
+                    value=date(2026, 10, 10),
                     max_value=date.today(),
                     help="Used to auto-compute tenure_months",
                 )
