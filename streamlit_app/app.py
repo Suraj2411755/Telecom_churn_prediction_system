@@ -351,7 +351,7 @@ def compute_derived_features(
 # Edit the thresholds / texts below to match your business.
 # ──────────────────────────────────────────────────────────────────────────────
  
-def get_churn_insights(f: dict, max_items: int = 4) -> list[dict]:
+def get_churn_insights(f: dict, max_items: int = 4, risk: str = "HIGH") -> list[dict]:
     """Return a list of {reason, action, severity} for one customer's features."""
     items = []
  
@@ -389,12 +389,249 @@ def get_churn_insights(f: dict, max_items: int = 4) -> list[dict]:
  
     items.sort(key=lambda x: x["severity"], reverse=True)
     if not items:
-        items.append({
-            "severity": 1,
-            "reason": "No single dominant behavioural risk factor found",
-            "action": "Assign to the retention team for a manual account review",
-        })
+        if risk == "LOW":
+            items.append({
+                "severity": 0,
+                "reason": "Healthy usage - no major risk factors found",
+                "action": "No action needed. Continue quarterly monitoring",
+            })
+        else:
+            items.append({
+                "severity": 1,
+                "reason": "No single dominant behavioural risk factor found",
+                "action": "Assign to the retention team for a manual account review",
+            })
     return items[:max_items]
+ 
+ 
+# ── Batch helpers: status, insight columns, colours, Excel export ────────────
+ 
+STATUS_MAP = {
+    "CRITICAL": "WILL CHURN",
+    "HIGH":     "WILL CHURN",
+    "MEDIUM":   "AT RISK",
+    "LOW":      "SAFE",
+}
+ 
+# Table colours (dark-theme friendly) and Excel colours (light fills)
+ROW_CSS = {
+    "CRITICAL": "background-color: rgba(201,74,74,0.55); color: #FFFFFF",
+    "HIGH":     "background-color: rgba(201,74,74,0.40); color: #FFFFFF",
+    "MEDIUM":   "background-color: rgba(245,166,35,0.40); color: #FFFFFF",
+    "LOW":      "background-color: rgba(39,174,96,0.30); color: #FFFFFF",
+}
+ROW_XLSX = {"CRITICAL": "F4A3A3", "HIGH": "F8B4B4", "MEDIUM": "FFF2B3", "LOW": "C8EFD0"}
+ 
+ 
+def add_insight_columns(results_df: pd.DataFrame) -> pd.DataFrame:
+    """Add churn_status, churn_reason and recommended_action for EVERY customer."""
+    out = results_df.copy()
+    reasons, actions = [], []
+    for rec, risk in zip(out.to_dict("records"), out["risk_level"]):
+        ins = get_churn_insights(rec, max_items=2, risk=risk)
+        prefix = "Watch: " if risk == "LOW" and ins[0]["severity"] > 0 else ""
+        reasons.append(prefix + " | ".join(i["reason"] for i in ins))
+        actions.append(" | ".join(i["action"] for i in ins))
+    out["churn_status"] = out["risk_level"].map(STATUS_MAP)
+    out["churn_reason"] = reasons
+    out["recommended_action"] = actions
+    return out
+ 
+ 
+def style_by_risk(df: pd.DataFrame):
+    """Colour whole rows: red = high/critical, yellow = medium, green = low."""
+    if df.size > 300_000:          # keep the page fast for very large files
+        return df
+    def _row(r):
+        return [ROW_CSS.get(r["risk_level"], "")] * len(r)
+    return df.style.apply(_row, axis=1)
+ 
+ 
+def to_coloured_excel(df: pd.DataFrame) -> bytes | None:
+    """Excel file with the same row colours. Needs openpyxl; returns None if missing."""
+    try:
+        from openpyxl.styles import PatternFill, Font
+        buf = io.BytesIO()
+        with pd.ExcelWriter(buf, engine="openpyxl") as xw:
+            df.to_excel(xw, index=False, sheet_name="Churn Results")
+            ws = xw.sheets["Churn Results"]
+            risk_col = list(df.columns).index("risk_level") + 1
+            for cell in ws[1]:
+                cell.font = Font(bold=True)
+            for row in ws.iter_rows(min_row=2):
+                fill = PatternFill("solid", fgColor=ROW_XLSX.get(row[risk_col - 1].value, "FFFFFF"))
+                for cell in row:
+                    cell.fill = fill
+            for col in ws.columns:
+                width = max(len(str(c.value)) if c.value is not None else 0 for c in col[:200])
+                ws.column_dimensions[col[0].column_letter].width = min(max(width + 2, 10), 60)
+        return buf.getvalue()
+    except Exception:
+        return None
+ 
+ 
+# ── Real per-customer SHAP-style explanation (LightGBM contributions) ────────
+ 
+def lgbm_contributions(features: dict, pipeline) -> "pd.Series | None":
+    """Real per-customer feature contributions (log-odds) from the LightGBM model.
+ 
+    Uses LightGBM's built-in SHAP values (pred_contrib=True), so no extra library is
+    needed. Contributions of one-hot columns are summed back to the original feature.
+    Returns None if the pipeline structure is not supported (caller falls back).
+    """
+    try:
+        df = pd.DataFrame([features], columns=FEATURE_ORDER)[FEATURE_ORDER]
+        if hasattr(pipeline, "steps") and len(pipeline.steps) > 1:
+            pre = pipeline[:-1]
+            est = pipeline.steps[-1][1]
+            Xt = pre.transform(df)
+            try:
+                names = list(pre.get_feature_names_out())
+            except Exception:
+                names = None
+        else:
+            est = pipeline.steps[-1][1] if hasattr(pipeline, "steps") else pipeline
+            Xt, names = df, list(df.columns)
+        if hasattr(Xt, "toarray"):
+            Xt = Xt.toarray()
+        booster = getattr(est, "booster_", est)
+        raw = np.asarray(booster.predict(Xt, pred_contrib=True))[0]
+        contrib, bias = raw[:-1], raw[-1]
+ 
+        if names is None or len(names) != len(contrib):
+            if len(contrib) != len(FEATURE_ORDER):
+                return None
+            names = list(FEATURE_ORDER)
+ 
+        # Safety check: contributions must add up to the model's own probability
+        p_shap = 1.0 / (1.0 + math.exp(-(contrib.sum() + bias)))
+        p_model = float(pipeline.predict_proba(df)[0, 1])
+        if abs(p_shap - p_model) > 0.05:
+            return None
+ 
+        by_len = sorted(FEATURE_ORDER, key=len, reverse=True)
+        out: dict = {}
+        for n, v in zip(names, contrib):
+            clean = str(n).split("__", 1)[-1]
+            orig = next((f for f in by_len if clean == f or clean.startswith(f + "_")), clean)
+            out[orig] = out.get(orig, 0.0) + float(v)
+        return pd.Series(out)
+    except Exception:
+        return None
+ 
+ 
+def contributions_chart(contrib: pd.Series, features: dict, top_n: int = 10) -> go.Figure:
+    """Horizontal bar chart: red pushes toward churn, teal pushes toward retention."""
+    top = contrib.reindex(contrib.abs().sort_values(ascending=False).index)[:top_n]
+ 
+    def _lbl(feat):
+        v = features.get(feat, "")
+        try:
+            v = f"{float(v):,.2f}".rstrip("0").rstrip(".")
+        except (TypeError, ValueError):
+            pass
+        return f"{feat} = {v}"
+ 
+    fig = go.Figure(
+        go.Bar(
+            x=top.values.tolist(),
+            y=[_lbl(f) for f in top.index],
+            orientation="h",
+            marker=dict(color=[CORAL if v > 0 else TEAL for v in top.values]),
+            text=[f"{v:+.3f}" for v in top.values],
+            textposition="outside",
+            textfont=dict(color=WHITE, size=10),
+        )
+    )
+    fig.update_yaxes(autorange="reversed", tickfont=dict(color=WHITE))
+    fig.update_xaxes(tickfont=dict(color=WHITE), gridcolor="rgba(255,255,255,0.1)",
+                     zeroline=True, zerolinecolor=AMBER, zerolinewidth=2)
+    _plotly_layout_defaults(fig, "SHAP Feature Contributions (log-odds)")
+    fig.update_layout(height=380)
+    return fig
+ 
+ 
+def explain_figure(features: dict, prob: float):
+    """Return (figure, is_real). Real SHAP when possible, else the estimated chart."""
+    pipeline = load_model()
+    if pipeline is not None:
+        contrib = lgbm_contributions(features, pipeline)
+        if contrib is not None:
+            return contributions_chart(contrib, features), True
+    return shap_bar_chart(features, prob), False
+ 
+ 
+SHAP_CAPTION_REAL = (
+    "📌 Real SHAP values from the LightGBM model for this customer (log-odds scale). "
+    "Red bars push toward churn; teal bars push toward retention."
+)
+SHAP_CAPTION_EST = (
+    "📌 Estimated SHAP-style contributions (feature importance × deviation from mean) - "
+    "the exact model explanation was not available. "
+    "Red bars push toward churn; teal bars push toward retention."
+)
+ 
+ 
+def selectable_table(view_df: pd.DataFrame, key: str, height: int):
+    """Show a colour-coded table whose rows can be clicked. Returns the clicked row's index label."""
+    try:
+        ev = st.dataframe(
+            style_by_risk(view_df), use_container_width=True, height=height,
+            on_select="rerun", selection_mode="single-row", key=key,
+        )
+        rows = ev.selection.rows if ev is not None else []
+        return view_df.index[rows[0]] if rows else None
+    except TypeError:   # older Streamlit without row selection
+        st.dataframe(style_by_risk(view_df), use_container_width=True, height=height)
+        return None
+ 
+ 
+def render_customer_explanation(results_df: pd.DataFrame, idx, key: str) -> None:
+    """Full single-customer analysis (gauge + SHAP + reasons/actions) for one batch row."""
+    meta = load_metadata()
+    row = results_df.loc[idx]
+    features = {f: row[f] for f in FEATURE_ORDER}
+    prob = float(row["churn_probability"])
+    risk = str(row["risk_level"])
+    thresh = meta.get("optimal_threshold", 0.28)
+ 
+    st.markdown(
+        f"<div class='section-heading'>🧠 Customer #{idx}: {STATUS_MAP.get(risk, risk)} - analysis</div>",
+        unsafe_allow_html=True,
+    )
+    c1, c2 = st.columns(2)
+    with c1:
+        st.plotly_chart(gauge_chart(prob, thresh, risk), use_container_width=True, key=f"gauge_{key}_{idx}")
+        st.markdown(
+            f"<div style='text-align:center'><span class='badge-{risk.lower()}'>{risk} RISK</span></div>",
+            unsafe_allow_html=True,
+        )
+    with c2:
+        st.markdown("**📋 Feature Summary**")
+        shown = ["telecom_partner", "gender", "age", "tenure_months", "calls_made",
+                 "sms_sent", "data_used", "usage_score", "estimated_salary"]
+        st.dataframe(
+            pd.DataFrame({"Feature": shown, "Value": [str(features[f]) for f in shown]}),
+            use_container_width=True, hide_index=True,
+        )
+ 
+    fig, is_real = explain_figure(features, prob)
+    st.plotly_chart(fig, use_container_width=True, key=f"shap_{key}_{idx}")
+    st.caption(SHAP_CAPTION_REAL if is_real else SHAP_CAPTION_EST)
+ 
+    st.markdown("**🔎 Reasons & recommended actions**")
+    for ins in get_churn_insights(features, max_items=4, risk=risk):
+        st.markdown(
+            f"""
+            <div class='content-card' style='margin-bottom:10px;'>
+                <strong style='color:{CORAL}'>⚠️ Reason:</strong>
+                <span style='color:{WHITE}'>{ins['reason']}</span><br>
+                <strong style='color:{LIGHT_TEAL}'>✅ Recommended action:</strong>
+                <span style='color:{WHITE}'>{ins['action']}</span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
  
  
 def predict_via_api(features: dict, meta: dict) -> dict | None:
@@ -1021,11 +1258,9 @@ elif page == "🔍 Single Prediction":
             "<div class='section-heading'>🧠 Feature Contribution Analysis</div>",
             unsafe_allow_html=True,
         )
-        st.plotly_chart(shap_bar_chart(auto, prob), use_container_width=True)
-        st.caption(
-            "📌 Estimated SHAP-style contributions based on feature importance × deviation from mean. "
-            "Red bars push toward churn; teal bars push toward retention."
-        )
+        _fig, _real = explain_figure(auto, prob)
+        st.plotly_chart(_fig, use_container_width=True)
+        st.caption(SHAP_CAPTION_REAL if _real else SHAP_CAPTION_EST)
  
         # ── Churn reasons & recommended actions ──────────────────────────────
         if churn:
@@ -1100,17 +1335,16 @@ elif page == "📦 Batch Prediction":
                     st.error("Local model not available. Please ensure the API is running.")
                     st.stop()
                 results_df = predict_batch_local(df_raw.copy(), pipeline, meta)
+                results_df = add_insight_columns(results_df)
+                # Keep results across reruns (so download clicks don't clear the page)
+                st.session_state["batch_results"] = results_df
+                st.session_state["batch_file"] = uploaded_file.name
+                st.session_state["batch_run"] = st.session_state.get("batch_run", 0) + 1
  
-                # Add top reason + suggested action for predicted churners
-                _ins = [
-                    get_churn_insights(row.to_dict(), max_items=1)[0]
-                    if flag == 1 else {"reason": "-", "action": "-"}
-                    for (_, row), flag in zip(
-                        results_df.iterrows(), results_df["churn_prediction"]
-                    )
-                ]
-                results_df["top_reason"] = [i["reason"] for i in _ins]
-                results_df["suggested_action"] = [i["action"] for i in _ins]
+        _run = st.session_state.get("batch_run", 0)
+        _stored = st.session_state.get("batch_results")
+        if _stored is not None and st.session_state.get("batch_file") == uploaded_file.name:
+            results_df = _stored
  
             st.success(f"✅ Predictions complete for {len(results_df):,} customers!")
             st.markdown("---")
@@ -1177,31 +1411,92 @@ elif page == "📦 Batch Prediction":
                 fig_top.update_layout(height=340)
                 st.plotly_chart(fig_top, use_container_width=True)
  
-            # ── Results table ─────────────────────────────────────────────────
-            st.markdown("<div class='section-heading'>📋 Full Results</div>", unsafe_allow_html=True)
- 
-            def colour_risk(val: str) -> str:
-                return f"color: {_risk_colour(val)}; font-weight: 600"
- 
-            _front = ["churn_probability", "churn_prediction", "risk_level",
-                      "top_reason", "suggested_action"]
-            display_cols = _front + [c for c in results_df.columns if c not in _front]
-            st.dataframe(
-                results_df[display_cols]
-                .style.applymap(colour_risk, subset=["risk_level"]),
-                use_container_width=True,
-                height=350,
+            # ── Colour legend ─────────────────────────────────────────────────
+            st.markdown("<div class='section-heading'>📋 Full Results (colour-coded)</div>", unsafe_allow_html=True)
+            st.markdown(
+                f"""
+                <div style='margin-bottom:8px; font-size:0.9rem; color:{WHITE};'>
+                    <span style='background:rgba(201,74,74,0.7); padding:2px 10px; border-radius:6px;'>🔴 Red = will churn (HIGH / CRITICAL)</span>&nbsp;
+                    <span style='background:rgba(245,166,35,0.7); padding:2px 10px; border-radius:6px;'>🟡 Yellow = medium risk</span>&nbsp;
+                    <span style='background:rgba(39,174,96,0.7); padding:2px 10px; border-radius:6px;'>🟢 Green = safe (LOW)</span>
+                </div>
+                """,
+                unsafe_allow_html=True,
             )
+            st.caption("👆 Click a row to see the SHAP analysis for that customer.")
+            _sel_all = selectable_table(results_df, f"tbl_all_{_run}", 380)
+            if _sel_all is not None:
+                render_customer_explanation(results_df, _sel_all, f"all{_run}")
  
-            # ── Download ──────────────────────────────────────────────────────
-            csv_bytes = results_df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                label="⬇️ Download Results CSV",
-                data=csv_bytes,
-                file_name="churn_predictions.csv",
+            # ── Download: same CSV + new columns ──────────────────────────────
+            base_name = uploaded_file.name.rsplit(".", 1)[0]
+            d1, d2 = st.columns(2)
+            d1.download_button(
+                label="⬇️ Download same CSV + churn & insight columns",
+                data=results_df.to_csv(index=False).encode("utf-8"),
+                file_name=f"{base_name}_with_churn_insights.csv",
                 mime="text/csv",
                 use_container_width=True,
+                key="dl_all_csv",
             )
+            xlsx_all = to_coloured_excel(results_df)
+            if xlsx_all is not None:
+                d2.download_button(
+                    label="⬇️ Download colour-coded Excel (red / yellow / green)",
+                    data=xlsx_all,
+                    file_name=f"{base_name}_with_churn_insights.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="dl_all_xlsx",
+                )
+            else:
+                d2.caption("Add `openpyxl` to requirements.txt to enable the colour-coded Excel download.")
+ 
+            # ── High-risk customers (red) ─────────────────────────────────────
+            high_df = results_df[results_df["risk_level"].isin(["HIGH", "CRITICAL"])]
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='section-heading'>🔴 High-Risk Customers ({len(high_df):,}) - with reasons & actions</div>",
+                unsafe_allow_html=True,
+            )
+            if high_df.empty:
+                st.info("No high-risk customers in this file.")
+            else:
+                st.caption("👆 Click a customer to see why the model predicts churn (SHAP analysis).")
+                _high_view = high_df.sort_values("churn_probability", ascending=False)
+                _sel_high = selectable_table(_high_view, f"tbl_high_{_run}", 300)
+                if _sel_high is not None:
+                    render_customer_explanation(results_df, _sel_high, f"high{_run}")
+                st.download_button(
+                    "⬇️ Download high-risk customers (CSV)",
+                    high_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{base_name}_high_risk.csv",
+                    mime="text/csv",
+                    key="dl_high_csv",
+                )
+ 
+            # ── Medium-risk customers (yellow) ────────────────────────────────
+            med_df = results_df[results_df["risk_level"] == "MEDIUM"]
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                f"<div class='section-heading'>🟡 Medium-Risk Customers ({len(med_df):,}) - with reasons & actions</div>",
+                unsafe_allow_html=True,
+            )
+            if med_df.empty:
+                st.info("No medium-risk customers in this file.")
+            else:
+                st.caption("👆 Click a customer to see the SHAP analysis.")
+                _med_view = med_df.sort_values("churn_probability", ascending=False)
+                _sel_med = selectable_table(_med_view, f"tbl_med_{_run}", 300)
+                if _sel_med is not None:
+                    render_customer_explanation(results_df, _sel_med, f"med{_run}")
+                st.download_button(
+                    "⬇️ Download medium-risk customers (CSV)",
+                    med_df.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{base_name}_medium_risk.csv",
+                    mime="text/csv",
+                    key="dl_med_csv",
+                )
  
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Model Insights
@@ -1387,3 +1682,4 @@ elif page == "ℹ️ About":
             """,
             unsafe_allow_html=True,
         )
+ 
