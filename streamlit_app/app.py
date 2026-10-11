@@ -1,17 +1,18 @@
+
 """
 Telecom Customer Churn Prediction — Streamlit Application
 ==========================================================
 Single-file, production-ready Streamlit app.
-
+ 
 Run:
     streamlit run app.py
-
+ 
 Requirements:
     pip install -r requirements.txt
 """
-
+ 
 from __future__ import annotations
-
+ 
 import io
 import json
 import math
@@ -19,14 +20,14 @@ import os
 import sys
 from datetime import date, datetime
 from pathlib import Path
-
+ 
 import numpy as np
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Try loading model locally (fallback when API is not running)
 # ──────────────────────────────────────────────────────────────────────────────
@@ -35,20 +36,20 @@ try:
     _JOBLIB_AVAILABLE = True
 except ImportError:
     _JOBLIB_AVAILABLE = False
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Paths & Config
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 BASE_DIR = Path(__file__).resolve().parent
 PARENT_DIR = BASE_DIR.parent
-
+ 
 MODEL_PATH = PARENT_DIR / "app" / "telecom_churn_pipeline.joblib"
 METADATA_PATH = PARENT_DIR / "app" / "model_metadata.json"
-
+ 
 API_URL = os.getenv("API_URL", "http://localhost:8000")
 API_TIMEOUT = int(os.getenv("API_TIMEOUT", "10"))
-
+ 
 # ── Brand colours ─────────────────────────────────────────────────────────────
 TEAL   = "#008080"
 NAVY   = "#1A1A2E"
@@ -58,7 +59,7 @@ AMBER  = "#F5A623"
 GREEN  = "#27AE60"
 PURPLE = "#8E44AD"
 WHITE  = "#F0F4F8"
-
+ 
 FEATURE_ORDER = [
     "telecom_partner", "gender", "age", "num_dependents", "estimated_salary",
     "calls_made", "sms_sent", "data_used", "tenure_months",
@@ -67,38 +68,38 @@ FEATURE_ORDER = [
     "estimated_salary_log", "usage_score", "is_low_engagement",
     "low_usage_high_tenure",
 ]
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Page config (MUST be first Streamlit call)
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 st.set_page_config(
     page_title="Telecom Churn Intelligence",
     page_icon="📡",
     layout="wide",
     initial_sidebar_state="expanded",
 )
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Global CSS injection
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 st.markdown(
     f"""
     <style>
     /* ── Fonts ── */
     @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
-
+ 
     html, body, [class*="css"] {{
         font-family: 'Inter', sans-serif;
     }}
-
+ 
     /* ── Root background ── */
     .stApp {{
         background: linear-gradient(135deg, {NAVY} 0%, #16213E 60%, #0F3460 100%);
         color: {WHITE};
     }}
-
+ 
     /* ── Sidebar ── */
     section[data-testid="stSidebar"] {{
         background: linear-gradient(180deg, #0D0D1A 0%, {NAVY} 100%) !important;
@@ -109,7 +110,7 @@ st.markdown(
         font-size: 0.95rem;
         padding: 4px 0;
     }}
-
+ 
     /* ── Metric cards ── */
     .metric-card {{
         background: rgba(0, 128, 128, 0.15);
@@ -135,7 +136,7 @@ st.markdown(
         letter-spacing: 0.06em;
         margin-top: 4px;
     }}
-
+ 
     /* ── Hero ── */
     .hero-title {{
         font-size: 2.8rem;
@@ -150,13 +151,13 @@ st.markdown(
         color: #9AB;
         margin-bottom: 1.5rem;
     }}
-
+ 
     /* ── Risk badges ── */
     .badge-low      {{ background: {GREEN};  color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }}
     .badge-medium   {{ background: {AMBER};  color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }}
     .badge-high     {{ background: {CORAL};  color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }}
     .badge-critical {{ background: #8B0000; color: white; padding: 4px 12px; border-radius: 20px; font-weight: 600; }}
-
+ 
     /* ── Cards ── */
     .content-card {{
         background: rgba(255,255,255,0.05);
@@ -165,7 +166,7 @@ st.markdown(
         padding: 24px;
         margin-bottom: 16px;
     }}
-
+ 
     /* ── Section headings ── */
     .section-heading {{
         font-size: 1.5rem;
@@ -175,7 +176,7 @@ st.markdown(
         padding-bottom: 8px;
         margin-bottom: 20px;
     }}
-
+ 
     /* ── Streamlit default overrides ── */
     div[data-testid="stMetric"] {{
         background: rgba(0,128,128,0.1);
@@ -185,7 +186,7 @@ st.markdown(
     }}
     div[data-testid="stMetric"] label {{ color: #9AB !important; }}
     div[data-testid="stMetric"] div[data-testid="stMetricValue"] {{ color: {LIGHT_TEAL} !important; }}
-
+ 
     /* Buttons */
     .stButton > button {{
         background: linear-gradient(135deg, {TEAL}, {LIGHT_TEAL});
@@ -197,27 +198,27 @@ st.markdown(
         transition: opacity 0.2s;
     }}
     .stButton > button:hover {{ opacity: 0.88; }}
-
+ 
     /* Form inputs */
     .stSelectbox > div, .stNumberInput > div, .stDateInput > div {{
         background: rgba(255,255,255,0.08) !important;
         border-radius: 8px;
     }}
-
+ 
     /* DataFrames */
     .dataframe {{ background: rgba(255,255,255,0.05); border-radius: 8px; }}
-
+ 
     /* Footer */
     footer {{ visibility: hidden; }}
     </style>
     """,
     unsafe_allow_html=True,
 )
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Cache helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 @st.cache_resource(show_spinner="Loading model…")
 def load_model():
     """Load the LightGBM pipeline from disk (cached for the session lifetime)."""
@@ -226,8 +227,8 @@ def load_model():
     if MODEL_PATH.exists():
         return joblib.load(MODEL_PATH)
     return None
-
-
+ 
+ 
 @st.cache_data(show_spinner=False)
 def load_metadata() -> dict:
     """Load model_metadata.json (cached)."""
@@ -266,12 +267,12 @@ def load_metadata() -> dict:
         "telecom_partners": ["Jio", "Airtel", "Vi", "BSNL"],
         "genders": ["Male", "Female"],
     }
-
-
+ 
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Prediction helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 def _risk_level(prob: float) -> str:
     if prob < 0.25:
         return "LOW"
@@ -280,12 +281,12 @@ def _risk_level(prob: float) -> str:
     elif prob < 0.65:
         return "HIGH"
     return "CRITICAL"
-
-
+ 
+ 
 def _risk_colour(risk: str) -> str:
     return {"LOW": GREEN, "MEDIUM": AMBER, "HIGH": CORAL, "CRITICAL": "#8B0000"}[risk]
-
-
+ 
+ 
 def _recommendation(risk: str) -> str:
     return {
         "LOW": "✅ No immediate action required. Continue monitoring quarterly.",
@@ -293,8 +294,8 @@ def _recommendation(risk: str) -> str:
         "HIGH": "📞 Immediate outreach recommended — escalate to the retention team.",
         "CRITICAL": "🚨 Priority intervention: offer a loyalty discount or premium upgrade now.",
     }[risk]
-
-
+ 
+ 
 def compute_derived_features(
     telecom_partner, gender, age, num_dependents, estimated_salary,
     calls_made, sms_sent, data_used, date_of_registration,
@@ -303,12 +304,12 @@ def compute_derived_features(
     now = datetime.now()
     reg = datetime.combine(date_of_registration, datetime.min.time())
     tenure_months = max(1, (now.year - reg.year) * 12 + (now.month - reg.month))
-
+ 
     calls = max(calls_made, 0)
     sms   = max(sms_sent, 0)
     data  = max(data_used, 0)
     t     = max(tenure_months, 1)
-
+ 
     calls_per_month    = round(calls / t, 4)
     data_per_month     = round(data  / t, 4)
     sms_per_month      = round(sms   / t, 4)
@@ -316,12 +317,12 @@ def compute_derived_features(
     sms_to_call_ratio  = round(sms   / calls, 4) if calls > 0 else 0.0
     age_x_dependents   = age * num_dependents
     estimated_salary_log = round(math.log1p(estimated_salary), 6)
-
+ 
     total              = calls + sms + data / 1000
     usage_score        = round(total / t, 4)
     is_low_engagement  = int(usage_score < 1.0)
     low_usage_high_tenure = int(is_low_engagement == 1 and tenure_months > 24)
-
+ 
     return {
         "telecom_partner":      telecom_partner,
         "gender":               gender,
@@ -343,8 +344,59 @@ def compute_derived_features(
         "is_low_engagement":    is_low_engagement,
         "low_usage_high_tenure": low_usage_high_tenure,
     }
-
-
+ 
+ 
+# ──────────────────────────────────────────────────────────────────────────────
+# Churn reasons & retention actions (rule-based)
+# Edit the thresholds / texts below to match your business.
+# ──────────────────────────────────────────────────────────────────────────────
+ 
+def get_churn_insights(f: dict, max_items: int = 4) -> list[dict]:
+    """Return a list of {reason, action, severity} for one customer's features."""
+    items = []
+ 
+    def add(severity, reason, action):
+        items.append({"severity": severity, "reason": reason, "action": action})
+ 
+    tenure = f.get("tenure_months", 0)
+    usage  = f.get("usage_score", 0)
+    calls  = f.get("calls_per_month", 0)
+    data   = f.get("data_per_month", 0)
+    sms    = f.get("sms_per_month", 0)
+    ratio  = f.get("sms_to_call_ratio", 0)
+ 
+    if f.get("low_usage_high_tenure", 0) == 1:
+        add(3, "Long-time customer whose usage is very low (losing interest)",
+            "Retention agent call + loyalty reward (bonus data / cashback on next recharge)")
+    if f.get("is_low_engagement", 0) == 1:
+        add(3, f"Low overall engagement (usage score {usage:.2f})",
+            "Re-engagement campaign: reminder SMS, personalised bundle, small recharge cashback")
+    if tenure <= 6:
+        add(2, f"New customer (only {tenure} months) - early-stage customers churn most",
+            "Onboarding offer, welcome call and a check-in within the first 90 days")
+    if calls < 5:
+        add(2, f"Very few calls per month ({calls:.1f})",
+            "Offer free talk-time or a cheaper calling-focused plan")
+    if data < 100:
+        add(2, f"Very low data usage ({data:.0f} MB per month)",
+            "Suggest a data pack that fits their usage, or a free data top-up to build the habit")
+    if ratio > 5:
+        add(1, "Uses mostly SMS and rarely calls (possible plan mismatch)",
+            "Review plan fit and move to a bundle that matches this usage pattern")
+    if f.get("num_dependents", 0) >= 3:
+        add(1, "Several dependents - likely price-sensitive",
+            "Offer a family/shared plan with a discount")
+ 
+    items.sort(key=lambda x: x["severity"], reverse=True)
+    if not items:
+        items.append({
+            "severity": 1,
+            "reason": "No single dominant behavioural risk factor found",
+            "action": "Assign to the retention team for a manual account review",
+        })
+    return items[:max_items]
+ 
+ 
 def predict_via_api(features: dict, meta: dict) -> dict | None:
     """Call the FastAPI /predict endpoint."""
     try:
@@ -357,8 +409,8 @@ def predict_via_api(features: dict, meta: dict) -> dict | None:
         return resp.json()
     except Exception:
         return None
-
-
+ 
+ 
 def predict_local(features: dict, pipeline, meta: dict) -> dict:
     """Run inference locally using the loaded pipeline."""
     threshold = meta.get("optimal_threshold", 0.28)
@@ -366,7 +418,7 @@ def predict_local(features: dict, pipeline, meta: dict) -> dict:
     prob = float(pipeline.predict_proba(df)[0, 1])
     churn = prob >= threshold
     risk = _risk_level(prob)
-
+ 
     z = 1.96
     margin = z * math.sqrt(prob * (1 - prob) / 1000)
     return {
@@ -381,8 +433,8 @@ def predict_local(features: dict, pipeline, meta: dict) -> dict:
         "model_version": meta.get("model_version", "1.0.0"),
         "threshold_used": threshold,
     }
-
-
+ 
+ 
 def predict_batch_local(df_input: pd.DataFrame, pipeline, meta: dict) -> pd.DataFrame:
     """Run batch inference locally."""
     threshold = meta.get("optimal_threshold", 0.28)
@@ -394,16 +446,16 @@ def predict_batch_local(df_input: pd.DataFrame, pipeline, meta: dict) -> pd.Data
         churn_prediction=(probs >= threshold).astype(int),
         risk_level=risks,
     )
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Plotly helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 PLOT_BG  = "rgba(0,0,0,0)"
 PAPER_BG = "rgba(0,0,0,0)"
 FONT_CLR = WHITE
-
-
+ 
+ 
 def _plotly_layout_defaults(fig: go.Figure, title: str = "") -> go.Figure:
     fig.update_layout(
         title=dict(text=title, font=dict(color=LIGHT_TEAL, size=16)),
@@ -413,8 +465,8 @@ def _plotly_layout_defaults(fig: go.Figure, title: str = "") -> go.Figure:
         margin=dict(l=20, r=20, t=45, b=20),
     )
     return fig
-
-
+ 
+ 
 def gauge_chart(prob: float, threshold: float, risk: str) -> go.Figure:
     colour = _risk_colour(risk)
     fig = go.Figure(
@@ -452,13 +504,13 @@ def gauge_chart(prob: float, threshold: float, risk: str) -> go.Figure:
         margin=dict(l=20, r=20, t=30, b=10),
     )
     return fig
-
-
+ 
+ 
 def feature_importance_chart(importance: dict, top_n: int = 15) -> go.Figure:
     sorted_items = sorted(importance.items(), key=lambda x: x[1], reverse=True)[:top_n]
     features, values = zip(*sorted_items)
     colours = [TEAL if v > 0.1 else LIGHT_TEAL if v > 0.05 else "#4A9090" for v in values]
-
+ 
     fig = go.Figure(
         go.Bar(
             x=list(values),
@@ -475,8 +527,8 @@ def feature_importance_chart(importance: dict, top_n: int = 15) -> go.Figure:
     _plotly_layout_defaults(fig, "Feature Importance (Permutation)")
     fig.update_layout(height=420)
     return fig
-
-
+ 
+ 
 def shap_bar_chart(features: dict, prob: float) -> go.Figure:
     """Simulated SHAP-style bar chart based on importance × feature deviation."""
     meta = load_metadata()
@@ -495,11 +547,11 @@ def shap_bar_chart(features: dict, prob: float) -> go.Figure:
         except TypeError:
             deviation = 0.0
         shap_vals[feat] = round(imp * deviation * (prob - 0.5) * 2, 4)
-
+ 
     sorted_shap = sorted(shap_vals.items(), key=lambda x: abs(x[1]), reverse=True)[:8]
     feats, vals = zip(*sorted_shap)
     colours = [CORAL if v > 0 else TEAL for v in vals]
-
+ 
     fig = go.Figure(
         go.Bar(
             x=list(vals),
@@ -517,8 +569,8 @@ def shap_bar_chart(features: dict, prob: float) -> go.Figure:
     _plotly_layout_defaults(fig, "SHAP-style Feature Contributions (Estimated)")
     fig.update_layout(height=320)
     return fig
-
-
+ 
+ 
 def roc_placeholder_chart() -> go.Figure:
     """Approximate ROC curve from reported AUC ≈ 0.50 (shows shape)."""
     fpr = np.linspace(0, 1, 100)
@@ -546,8 +598,8 @@ def roc_placeholder_chart() -> go.Figure:
         legend=dict(font=dict(color=WHITE), bgcolor="rgba(0,0,0,0.3)"),
     )
     return fig
-
-
+ 
+ 
 def threshold_sensitivity_chart(meta: dict) -> go.Figure:
     """Illustrative threshold vs precision/recall/F1 chart."""
     thresholds = np.arange(0.05, 0.95, 0.02)
@@ -560,7 +612,7 @@ def threshold_sensitivity_chart(meta: dict) -> go.Figure:
         0,
     )
     optimal_t = meta.get("optimal_threshold", 0.28)
-
+ 
     fig = go.Figure()
     fig.add_trace(go.Scatter(x=thresholds, y=precision, name="Precision",
                              line=dict(color=TEAL, width=2)))
@@ -581,12 +633,12 @@ def threshold_sensitivity_chart(meta: dict) -> go.Figure:
         legend=dict(font=dict(color=WHITE), bgcolor="rgba(0,0,0,0.3)"),
     )
     return fig
-
-
+ 
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # Sidebar navigation
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 with st.sidebar:
     st.markdown(
         f"""
@@ -601,22 +653,22 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-
+ 
     page = st.radio(
         "Navigate",
         ["🏠 Home", "🔍 Single Prediction", "📦 Batch Prediction", "📊 Model Insights", "ℹ️ About"],
         label_visibility="collapsed",
     )
-
+ 
     st.markdown("<hr style='border-color:#333; margin: 16px 0;'>", unsafe_allow_html=True)
-
+ 
     # API status indicator
     try:
         health_resp = requests.get(f"{API_URL}/health", timeout=2)
         api_ok = health_resp.status_code == 200
     except Exception:
         api_ok = False
-
+ 
     if api_ok:
         st.markdown(
             f"<div style='color:{GREEN}; font-size:0.8rem;'>● API Online</div>",
@@ -627,7 +679,7 @@ with st.sidebar:
             f"<div style='color:{AMBER}; font-size:0.8rem;'>● API Offline (local mode)</div>",
             unsafe_allow_html=True,
         )
-
+ 
     meta = load_metadata()
     st.markdown(
         f"""
@@ -639,12 +691,12 @@ with st.sidebar:
         """,
         unsafe_allow_html=True,
     )
-
-
+ 
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Home
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 if page == "🏠 Home":
     st.markdown(
         """
@@ -656,7 +708,7 @@ if page == "🏠 Home":
         """,
         unsafe_allow_html=True,
     )
-
+ 
     # ── Key metric cards ──────────────────────────────────────────────────────
     cols = st.columns(4)
     metrics = [
@@ -675,10 +727,10 @@ if page == "🏠 Home":
             """,
             unsafe_allow_html=True,
         )
-
+ 
     st.markdown("<br>", unsafe_allow_html=True)
     c1, c2 = st.columns(2)
-
+ 
     with c1:
         st.markdown("<div class='section-heading'>📌 Project Overview</div>", unsafe_allow_html=True)
         st.markdown(
@@ -688,7 +740,7 @@ if page == "🏠 Home":
             using a <strong style='color:{LIGHT_TEAL}'>LightGBM</strong> model
             trained on <strong>243,553</strong> customer records from 4 Indian operators
             (Jio, Airtel, Vi, BSNL).</p>
-
+ 
             <p><strong style='color:{LIGHT_TEAL}'>Features engineered:</strong></p>
             <ul style='margin:0; padding-left:18px; color:#ccc;'>
                 <li>Per-month usage ratios (calls, SMS, data)</li>
@@ -701,7 +753,7 @@ if page == "🏠 Home":
             """,
             unsafe_allow_html=True,
         )
-
+ 
     with c2:
         st.markdown("<div class='section-heading'>🎯 Model Performance</div>", unsafe_allow_html=True)
         test_m = meta.get("test_metrics", {})
@@ -722,7 +774,7 @@ if page == "🏠 Home":
             use_container_width=True,
             hide_index=True,
         )
-
+ 
         st.markdown("<br>", unsafe_allow_html=True)
         hp_data = {
             "Hyperparameter": ["n_estimators", "max_depth", "learning_rate", "num_leaves"],
@@ -740,7 +792,7 @@ if page == "🏠 Home":
             use_container_width=True,
             hide_index=True,
         )
-
+ 
     # ── Risk level legend ─────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown("<div class='section-heading'>🎨 Risk Level Guide</div>", unsafe_allow_html=True)
@@ -764,26 +816,26 @@ if page == "🏠 Home":
             """,
             unsafe_allow_html=True,
         )
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Single Prediction
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 elif page == "🔍 Single Prediction":
     st.markdown("<div class='hero-title'>🔍 Single Customer Prediction</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='hero-subtitle'>Enter customer details to predict churn risk.</div>",
         unsafe_allow_html=True,
     )
-
+ 
     partners = meta.get("telecom_partners", ["Jio", "Airtel", "Vi", "BSNL"])
     genders  = meta.get("genders", ["Male", "Female"])
-
+ 
     with st.form("predict_form"):
         tab_demo, tab_usage, tab_derived = st.tabs(
             ["👤 Demographics", "📱 Usage", "⚙️ Derived Features"]
         )
-
+ 
         # ── Demographics tab ─────────────────────────────────────────────────
         with tab_demo:
             c1, c2 = st.columns(2)
@@ -816,7 +868,7 @@ elif page == "🔍 Single Prediction":
                     max_value=date.today(),
                     help="Used to auto-compute tenure_months",
                 )
-
+ 
         # ── Usage tab ────────────────────────────────────────────────────────
         with tab_usage:
             c1, c2, c3 = st.columns(3)
@@ -840,7 +892,7 @@ elif page == "🔍 Single Prediction":
                 "are automatically computed from the above inputs + registration date.",
                 icon=None,
             )
-
+ 
         # ── Derived features tab (manual override) ───────────────────────────
         with tab_derived:
             st.markdown(
@@ -860,9 +912,9 @@ elif page == "🔍 Single Prediction":
                 usage_score = st.number_input("usage_score", 0.0, 100.0, 0.0, format="%.4f")
                 is_low_engagement = st.selectbox("is_low_engagement", [0, 1], index=0)
                 low_usage_high_tenure = st.selectbox("low_usage_high_tenure", [0, 1], index=0)
-
+ 
         submitted = st.form_submit_button("🚀 Predict Churn Risk", use_container_width=True)
-
+ 
     if submitted:
         # Auto-compute derived features
         auto = compute_derived_features(
@@ -888,12 +940,12 @@ elif page == "🔍 Single Prediction":
         auto["low_usage_high_tenure"] = low_usage_high_tenure
         auto["estimated_salary_log"] = round(math.log1p(estimated_salary), 6)
         auto["age_x_dependents"] = age * num_dependents
-
+ 
         # Try API first, fall back to local
         result = None
         if api_ok:
             result = predict_via_api(auto, meta)
-
+ 
         if result is None:
             pipeline = load_model()
             if pipeline is not None:
@@ -901,7 +953,7 @@ elif page == "🔍 Single Prediction":
             else:
                 st.error("Neither the API nor local model is available. Please check your setup.")
                 st.stop()
-
+ 
         # ── Display results ──────────────────────────────────────────────────
         prob  = result["churn_probability"]
         risk  = result["risk_level"]
@@ -909,15 +961,15 @@ elif page == "🔍 Single Prediction":
         ci    = result["confidence_interval"]
         rec   = result.get("recommendation", _recommendation(risk))
         thresh = result.get("threshold_used", meta.get("optimal_threshold", 0.28))
-
+ 
         st.markdown("---")
         st.markdown("<div class='section-heading'>📊 Prediction Result</div>", unsafe_allow_html=True)
-
+ 
         r1, r2 = st.columns([1, 1])
-
+ 
         with r1:
             st.plotly_chart(gauge_chart(prob, thresh, risk), use_container_width=True)
-
+ 
             badge_cls = f"badge-{risk.lower()}"
             st.markdown(
                 f"""
@@ -935,7 +987,7 @@ elif page == "🔍 Single Prediction":
                 """,
                 unsafe_allow_html=True,
             )
-
+ 
         with r2:
             st.markdown("**📋 Feature Summary**")
             summary_df = pd.DataFrame({
@@ -962,7 +1014,7 @@ elif page == "🔍 Single Prediction":
                 """,
                 unsafe_allow_html=True,
             )
-
+ 
         # ── SHAP-style explanation ────────────────────────────────────────────
         st.markdown("<br>", unsafe_allow_html=True)
         st.markdown(
@@ -974,18 +1026,42 @@ elif page == "🔍 Single Prediction":
             "📌 Estimated SHAP-style contributions based on feature importance × deviation from mean. "
             "Red bars push toward churn; teal bars push toward retention."
         )
-
+ 
+        # ── Churn reasons & recommended actions ──────────────────────────────
+        if churn:
+            st.markdown("<br>", unsafe_allow_html=True)
+            st.markdown(
+                "<div class='section-heading'>🔎 Why this customer may churn & what to do</div>",
+                unsafe_allow_html=True,
+            )
+            for ins in get_churn_insights(auto):
+                st.markdown(
+                    f"""
+                    <div class='content-card' style='margin-bottom:10px;'>
+                        <strong style='color:{CORAL}'>⚠️ Reason:</strong>
+                        <span style='color:{WHITE}'>{ins['reason']}</span><br>
+                        <strong style='color:{LIGHT_TEAL}'>✅ Recommended action:</strong>
+                        <span style='color:{WHITE}'>{ins['action']}</span>
+                    </div>
+                    """,
+                    unsafe_allow_html=True,
+                )
+            st.caption(
+                "Reasons are risk factors found from the customer's usage pattern, not proven causes. "
+                "Treat the actions as retention steps to test."
+            )
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Batch Prediction
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 elif page == "📦 Batch Prediction":
     st.markdown("<div class='hero-title'>📦 Batch Prediction</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='hero-subtitle'>Upload a CSV file with multiple customers to predict churn at scale.</div>",
         unsafe_allow_html=True,
     )
-
+ 
     st.markdown(
         f"""
         <div class='content-card'>
@@ -995,28 +1071,28 @@ elif page == "📦 Batch Prediction":
         """,
         unsafe_allow_html=True,
     )
-
+ 
     uploaded_file = st.file_uploader(
         "Upload CSV", type=["csv"],
         help="CSV must contain all 19 model features",
     )
-
+ 
     if uploaded_file is not None:
         try:
             df_raw = pd.read_csv(uploaded_file)
         except Exception as e:
             st.error(f"Failed to read CSV: {e}")
             st.stop()
-
+ 
         st.markdown("**📄 Data Preview (first 10 rows)**")
         st.dataframe(df_raw.head(10), use_container_width=True)
         st.caption(f"Shape: {df_raw.shape[0]:,} rows × {df_raw.shape[1]} columns")
-
+ 
         missing = [f for f in FEATURE_ORDER if f not in df_raw.columns]
         if missing:
             st.error(f"Missing columns: {missing}")
             st.stop()
-
+ 
         if st.button("🚀 Run Batch Predictions", use_container_width=True):
             with st.spinner("Running predictions…"):
                 pipeline = load_model()
@@ -1024,24 +1100,35 @@ elif page == "📦 Batch Prediction":
                     st.error("Local model not available. Please ensure the API is running.")
                     st.stop()
                 results_df = predict_batch_local(df_raw.copy(), pipeline, meta)
-
+ 
+                # Add top reason + suggested action for predicted churners
+                _ins = [
+                    get_churn_insights(row.to_dict(), max_items=1)[0]
+                    if flag == 1 else {"reason": "-", "action": "-"}
+                    for (_, row), flag in zip(
+                        results_df.iterrows(), results_df["churn_prediction"]
+                    )
+                ]
+                results_df["top_reason"] = [i["reason"] for i in _ins]
+                results_df["suggested_action"] = [i["action"] for i in _ins]
+ 
             st.success(f"✅ Predictions complete for {len(results_df):,} customers!")
             st.markdown("---")
-
+ 
             # ── Summary stats ─────────────────────────────────────────────────
             churners = int(results_df["churn_prediction"].sum())
             total    = len(results_df)
             churn_rt = churners / total
-
+ 
             s1, s2, s3, s4 = st.columns(4)
             s1.metric("Total Customers", f"{total:,}")
             s2.metric("Predicted Churners", f"{churners:,}")
             s3.metric("Predicted Retention", f"{total - churners:,}")
             s4.metric("Churn Rate", f"{churn_rt:.2%}")
-
+ 
             st.markdown("<br>", unsafe_allow_html=True)
             ch1, ch2 = st.columns(2)
-
+ 
             with ch1:
                 risk_counts = results_df["risk_level"].value_counts()
                 fig_pie = go.Figure(
@@ -1061,7 +1148,7 @@ elif page == "📦 Batch Prediction":
                     height=340,
                 )
                 st.plotly_chart(fig_pie, use_container_width=True)
-
+ 
             with ch2:
                 top_risk = (
                     results_df.nlargest(15, "churn_probability")
@@ -1089,24 +1176,23 @@ elif page == "📦 Batch Prediction":
                 _plotly_layout_defaults(fig_top, "Top 15 Highest-Risk Customers")
                 fig_top.update_layout(height=340)
                 st.plotly_chart(fig_top, use_container_width=True)
-
+ 
             # ── Results table ─────────────────────────────────────────────────
             st.markdown("<div class='section-heading'>📋 Full Results</div>", unsafe_allow_html=True)
-
+ 
             def colour_risk(val: str) -> str:
                 return f"color: {_risk_colour(val)}; font-weight: 600"
-
-            display_cols = ["churn_probability", "churn_prediction", "risk_level"] + [
-                c for c in results_df.columns
-                if c not in {"churn_probability", "churn_prediction", "risk_level"}
-            ]
+ 
+            _front = ["churn_probability", "churn_prediction", "risk_level",
+                      "top_reason", "suggested_action"]
+            display_cols = _front + [c for c in results_df.columns if c not in _front]
             st.dataframe(
                 results_df[display_cols]
                 .style.applymap(colour_risk, subset=["risk_level"]),
                 use_container_width=True,
                 height=350,
             )
-
+ 
             # ── Download ──────────────────────────────────────────────────────
             csv_bytes = results_df.to_csv(index=False).encode("utf-8")
             st.download_button(
@@ -1116,18 +1202,18 @@ elif page == "📦 Batch Prediction":
                 mime="text/csv",
                 use_container_width=True,
             )
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: Model Insights
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 elif page == "📊 Model Insights":
     st.markdown("<div class='hero-title'>📊 Model Insights</div>", unsafe_allow_html=True)
     st.markdown(
         "<div class='hero-subtitle'>Understand model performance, feature importance, and threshold sensitivity.</div>",
         unsafe_allow_html=True,
     )
-
+ 
     # ── Performance table ──────────────────────────────────────────────────────
     st.markdown("<div class='section-heading'>🏆 Model Leaderboard</div>", unsafe_allow_html=True)
     leaderboard = pd.DataFrame({
@@ -1146,11 +1232,11 @@ elif page == "📊 Model Insights":
         use_container_width=True,
         hide_index=True,
     )
-
+ 
     st.markdown("<br>", unsafe_allow_html=True)
-
+ 
     m1, m2 = st.columns(2)
-
+ 
     with m1:
         st.markdown(
             "<div class='section-heading'>📈 Feature Importance</div>",
@@ -1161,11 +1247,11 @@ elif page == "📊 Model Insights":
             st.plotly_chart(feature_importance_chart(importance), use_container_width=True)
         else:
             st.info("Feature importance not available in metadata.")
-
+ 
     with m2:
         st.markdown("<div class='section-heading'>📉 ROC Curve</div>", unsafe_allow_html=True)
         st.plotly_chart(roc_placeholder_chart(), use_container_width=True)
-
+ 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(
         "<div class='section-heading'>🎚️ Threshold Sensitivity</div>",
@@ -1176,7 +1262,7 @@ elif page == "📊 Model Insights":
         "At the optimal threshold of 0.28 the model achieves F1 = 0.334 on the churn class. "
         "Lower thresholds increase recall at the cost of precision."
     )
-
+ 
     # ── Hyperparameters card ───────────────────────────────────────────────────
     st.markdown(
         "<div class='section-heading'>⚙️ Optimised Hyperparameters (Optuna)</div>",
@@ -1187,16 +1273,16 @@ elif page == "📊 Model Insights":
         {"Parameter": list(hp.keys()), "Value": [str(v) for v in hp.values()]}
     )
     st.dataframe(hp_df, use_container_width=True, hide_index=True)
-
+ 
 # ──────────────────────────────────────────────────────────────────────────────
 # PAGE: About
 # ──────────────────────────────────────────────────────────────────────────────
-
+ 
 elif page == "ℹ️ About":
     st.markdown("<div class='hero-title'>ℹ️ About This Project</div>", unsafe_allow_html=True)
-
+ 
     c1, c2 = st.columns([3, 2])
-
+ 
     with c1:
         st.markdown(
             f"""
@@ -1228,7 +1314,7 @@ elif page == "ℹ️ About":
             """,
             unsafe_allow_html=True,
         )
-
+ 
     with c2:
         st.markdown(
             f"""
@@ -1268,7 +1354,7 @@ elif page == "ℹ️ About":
             """,
             unsafe_allow_html=True,
         )
-
+ 
     # ── Pipeline diagram ───────────────────────────────────────────────────────
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown(
